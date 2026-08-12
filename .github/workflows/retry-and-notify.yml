@@ -1,0 +1,75 @@
+name: Retry failed sign workflows
+
+on:
+  workflow_run:
+    workflows:
+      - Picage Auto Sign
+      - Baidu Tieba Auto Sign
+    types:
+      - completed
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  retry:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'schedule' &&
+      github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-run failed workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: gh api --method POST "repos/${GH_REPO}/actions/runs/${RUN_ID}/rerun"
+
+  notify:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'schedule' &&
+      github.event.workflow_run.run_attempt == 2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send failure email
+        env:
+          SMTP_HOST: smtp.feishu.cn
+          SMTP_PORT: '465'
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          WORKFLOW_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: python
+        run: |
+          import os
+          import smtplib
+          import ssl
+          from email.message import EmailMessage
+
+          message = EmailMessage()
+          message["Subject"] = f"[Pica] {os.environ['WORKFLOW_NAME']} failed after retry"
+          message["From"] = os.environ["SMTP_USERNAME"]
+          message["To"] = os.environ["MAIL_TO"]
+          message.set_content(
+              f"Workflow: {os.environ['WORKFLOW_NAME']}\n"
+              f"Run ID: {os.environ['RUN_ID']}\n"
+              "Result: failed on both the initial run and automatic retry\n"
+              f"Details: {os.environ['WORKFLOW_URL']}\n"
+          )
+
+          context = ssl.create_default_context()
+          with smtplib.SMTP_SSL(
+              os.environ["SMTP_HOST"],
+              int(os.environ["SMTP_PORT"]),
+              context=context,
+          ) as smtp:
+              smtp.login(
+                  os.environ["SMTP_USERNAME"],
+                  os.environ["SMTP_PASSWORD"],
+              )
+              smtp.send_message(message)
