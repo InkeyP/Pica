@@ -1,6 +1,7 @@
 name: Retry failed sign workflows
 
 on:
+  workflow_dispatch:
   workflow_run:
     workflows:
       - Picage Auto Sign
@@ -29,9 +30,10 @@ jobs:
 
   notify:
     if: >-
-      github.event.workflow_run.conclusion == 'failure' &&
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.event == 'schedule' &&
-      github.event.workflow_run.run_attempt == 2
+      github.event.workflow_run.run_attempt == 2)
     runs-on: ubuntu-latest
     steps:
       - name: Send failure email
@@ -41,9 +43,10 @@ jobs:
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
-          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
-          WORKFLOW_URL: ${{ github.event.workflow_run.html_url }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
+          IS_TEST: ${{ github.event_name == 'workflow_dispatch' }}
+          WORKFLOW_NAME: ${{ github.event_name == 'workflow_dispatch' && 'SMTP configuration test' || github.event.workflow_run.name }}
+          WORKFLOW_URL: ${{ github.event_name == 'workflow_dispatch' && format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) || github.event.workflow_run.html_url }}
+          RUN_ID: ${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.workflow_run.id }}
         shell: python
         run: |
           import os
@@ -51,14 +54,24 @@ jobs:
           import ssl
           from email.message import EmailMessage
 
+          is_test = os.environ["IS_TEST"] == "true"
           message = EmailMessage()
-          message["Subject"] = f"[Pica] {os.environ['WORKFLOW_NAME']} failed after retry"
+          message["Subject"] = (
+              "[Pica] SMTP configuration test"
+              if is_test
+              else f"[Pica] {os.environ['WORKFLOW_NAME']} failed after retry"
+          )
           message["From"] = os.environ["SMTP_USERNAME"]
           message["To"] = os.environ["MAIL_TO"]
+          result = (
+              "SMTP login and email delivery test initiated successfully"
+              if is_test
+              else "Failed on both the initial run and automatic retry"
+          )
           message.set_content(
               f"Workflow: {os.environ['WORKFLOW_NAME']}\n"
               f"Run ID: {os.environ['RUN_ID']}\n"
-              "Result: failed on both the initial run and automatic retry\n"
+              f"Result: {result}\n"
               f"Details: {os.environ['WORKFLOW_URL']}\n"
           )
 
